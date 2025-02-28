@@ -1,44 +1,92 @@
 from telegram import Update
-from telegram.ext import ApplicationBuilder, MessageHandler, ContextTypes, filters
+from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
 import configparser
 import logging
+import redis
 from ChatGPT_HKBU import HKBU_ChatGPT
 
-# Global variable for ChatGPT instance
-chatgpt = None
-
-# Define the handler function for ChatGPT responses
-async def equiped_chatgpt(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    global chatgpt
-    reply_message = chatgpt.submit(update.message.text)
-    logging.info("Update: %s", update)
-    logging.info("Context: %s", context)
-    await context.bot.send_message(chat_id=update.effective_chat.id, text=reply_message)
+global redis1
+global chatgpt
 
 def main():
-    global chatgpt
-
-    # Load the configuration file
+    # Load your token and create an Updater for your Bot
     config = configparser.ConfigParser()
     config.read('config.ini')
+    
+    updater = Updater(token=config['TELEGRAM']['ACCESS_TOKEN'], use_context=True)
+    dispatcher = updater.dispatcher
 
-    # Initialize ChatGPT instance
-    chatgpt = HKBU_ChatGPT(config)
-
-    # Setup logging
-    logging.basicConfig(
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO
+    global redis1
+    redis1 = redis.Redis(
+        host=config['REDIS']['HOST'],
+        password=config['REDIS']['PASSWORD'],
+        port=config['REDIS']['REDISPORT'],
+        decode_responses=config['REDIS']['DECODE_RESPONSE'],
+        username=config['REDIS']['USER_NAME']
     )
 
-    # Create the Application
-    application = ApplicationBuilder().token(config['TELEGRAM']['ACCESS_TOKEN']).build()
+    # Set up logging
+    logging.basicConfig(
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        level=logging.INFO
+    )
 
-    # Add message handlers
-    chatgpt_handler = MessageHandler(filters.TEXT & ~filters.COMMAND, equiped_chatgpt)
-    application.add_handler(chatgpt_handler)
+    # Initialize ChatGPT
+    global chatgpt
+    chatgpt = HKBU_ChatGPT(config)
 
-    # Start the Bot
-    application.run_polling()
+    # Register handlers
+    # Commented out the echo handler as per your request
+    # echo_handler = MessageHandler(Filters.text & (~Filters.command), echo)
+    # dispatcher.add_handler(echo_handler)
+
+    # Dispatcher for ChatGPT
+    chatgpt_handler = MessageHandler(Filters.text & (~Filters.command), equiped_chatgpt)
+    dispatcher.add_handler(chatgpt_handler)
+
+    # On different commands - answer in Telegram
+    dispatcher.add_handler(CommandHandler("add", add))
+    dispatcher.add_handler(CommandHandler("help", help_command))
+    
+    # New command handler for /hello
+    dispatcher.add_handler(CommandHandler("hello", hello))
+
+    # Start the bot
+    updater.start_polling()
+    updater.idle()
+
+def equiped_chatgpt(update: Update, context: CallbackContext) -> None:
+    global chatgpt
+    reply_message = chatgpt.submit(update.message.text)
+    logging.info("Update: " + str(update))
+    logging.info("context: " + str(context))
+    context.bot.send_message(chat_id=update.effective_chat.id, text=reply_message)
+
+def help_command(update: Update, context: CallbackContext) -> None:
+    """Send a message when the command /help is issued."""
+    update.message.reply_text('Helping you helping you.')
+
+def add(update: Update, context: CallbackContext) -> None:
+    """Send a message when the command /add is issued."""
+    try:
+        global redis1
+        logging.info(context.args[0])
+        msg = context.args[0]  # /add keyword <-- this should store the keyword
+        redis1.incr(msg)
+        update.message.reply_text(
+            'You have said ' + msg + ' for ' + redis1.get(msg) + ' times.'
+        )
+    except (IndexError, ValueError):
+        update.message.reply_text('Usage: /add <keyword>')
+
+# New hello function
+def hello(update: Update, context: CallbackContext) -> None:
+    """Send a greeting message when the command /hello is issued."""
+    if context.args:
+        name = ' '.join(context.args)  # Join all arguments to handle multi-word names
+        update.message.reply_text(f'Good day, {name}!')
+    else:
+        update.message.reply_text('Usage: /hello <name>')
 
 if __name__ == '__main__':
     main()
